@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Giám sát chất lượng không khí</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root { --navy:#1e3a8a; --blue:#1d4ed8; --muted:#64748b; --red:#dc2626; }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; min-height:100vh; padding:16px;
+    font-family:system-ui,"Segoe UI",Roboto,sans-serif; color:var(--navy);
+    background:linear-gradient(160deg,#1e66d0 0%,#3b8ff0 45%,#7cc0ff 100%) fixed;
+  }
+  .wrap { max-width:1150px; margin:0 auto; }
+
+  /* Thanh tiêu đề */
+  .topbar {
+    display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;
+    background:linear-gradient(90deg,#1d4ed8,#2f7de8); color:#fff;
+    padding:12px 20px; border-radius:16px; box-shadow:0 4px 14px rgba(15,50,120,.35);
+  }
+  .topbar h1 { margin:0; font-size:1.2rem; }
+  .right { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .chip { background:rgba(255,255,255,.22); padding:5px 14px; border-radius:99px; font-size:.9rem; font-weight:600; white-space:nowrap; }
+  .chip.time { background:#fff; color:var(--blue); font-variant-numeric:tabular-nums; }
+  .chip.st { background:#b91c1c; font-weight:500; font-size:.8rem; }
+  .chip.st.on { background:#15803d; }
+
+  /* 4 thẻ chỉ số */
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px; margin-top:16px; }
+  .card {
+    background:rgba(255,255,255,.95); border-radius:18px; padding:18px 12px; text-align:center;
+    box-shadow:0 4px 14px rgba(15,50,120,.25); border:3px solid transparent; transition:.3s;
+  }
+  .card .ic { font-size:2.1rem; line-height:1; }
+  .card .nm { font-weight:700; margin:8px 0 4px; }
+  .card .vl { font-size:1.9rem; font-weight:800; color:var(--blue); font-variant-numeric:tabular-nums; }
+  .card .th { font-size:.8rem; color:var(--muted); margin-top:4px; }
+  .card.warn { border-color:var(--red); }
+  .card.warn .vl { color:var(--red); }
+  .card.warn .th { color:var(--red); font-weight:600; }
+
+  /* Biểu đồ */
+  .chart-box { background:rgba(255,255,255,.95); border-radius:18px; padding:16px 18px 14px; margin-top:16px; box-shadow:0 4px 14px rgba(15,50,120,.25); }
+  .chart-head { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; }
+  .chart-head h2 { margin:0; font-size:1.1rem; color:var(--navy); flex:1; text-align:center; min-width:260px; }
+  .tabs { display:flex; gap:6px; }
+  .tabs button { border:0; padding:6px 14px; border-radius:99px; background:#dbeafe; color:var(--blue); font-weight:600; cursor:pointer; font-size:.82rem; }
+  .tabs button.on { background:var(--blue); color:#fff; }
+  .chart-wrap { position:relative; height:390px; margin-top:8px; }
+  .note { font-size:.78rem; color:var(--muted); margin-top:6px; text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <h1>🌿 Giám sát chất lượng không khí</h1>
+    <div class="right">
+      <span class="chip" id="date">--</span>
+      <span class="chip time" id="clock">--:--:--</span>
+      <span class="chip st" id="status">Đang kết nối…</span>
+    </div>
+  </div>
+
+  <section class="cards" id="cards"></section>
+
+  <section class="chart-box">
+    <div class="chart-head">
+      <div class="tabs">
+        <button id="tabWeek" class="on">Trong tuần</button>
+        <button id="tabNow">Hiện tại</button>
+      </div>
+      <h2>Biểu đồ cột theo dõi chất lượng không khí trong tuần</h2>
+      <div style="width:150px" class="hide-sm"></div>
+    </div>
+    <div class="chart-wrap"><canvas id="chart"></canvas></div>
+    <div class="note" id="note">Đang tải…</div>
+  </section>
+</div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import { getDatabase, ref, onValue, get, query, orderByKey, startAt }
+  from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
+
+const app = initializeApp({
+  apiKey: "AIzaSyDqXOSk3WGJNX-3qAe6Y9Kc3PtWZadS44c",
+  authDomain: "test-5e293.firebaseapp.com",
+  databaseURL: "https://test-5e293-default-rtdb.firebaseio.com",
+  projectId: "test-5e293",
+  storageBucket: "test-5e293.firebasestorage.app",
+  messagingSenderId: "519505379073",
+  appId: "1:519505379073:web:a71f096da76ecb690de500"
+});
+const db = getDatabase(app);
+
+/* ================= Cấu hình chỉ số (sửa ngưỡng ở đây) ================= */
+const M = {
+  nhiet_do: { name:"Nhiệt độ",       icon:"🌡️", unit:"°C",    dec:1, thresh:33,   color:"#e8554e" },
+  do_am:    { name:"Độ ẩm",          icon:"💧", unit:"%",     dec:0, thresh:80,   color:"#6b86e0" },
+  co2:      { name:"CO₂",            icon:"☁️", unit:"ppm",   dec:0, thresh:1000, color:"#34b98a" },
+  bui_min:  { name:"Bụi mịn PM2.5",  icon:"🌫️", unit:"µg/m³", dec:0, thresh:50,   color:"#f6c244" }
+};
+const KEYS = Object.keys(M);
+const cur = { nhiet_do:null, do_am:null, co2:null, bui_min:null };
+
+/* ================= Đồng hồ: thứ / ngày / tháng + giờ ================= */
+const THU = ["Chủ nhật","Thứ Hai","Thứ Ba","Thứ Tư","Thứ Năm","Thứ Sáu","Thứ Bảy"];
+const p2 = n => String(n).padStart(2,"0");
+function tick(){
+  const d = new Date();
+  document.getElementById("date").textContent = `${THU[d.getDay()]}, ${p2(d.getDate())}/${p2(d.getMonth()+1)}`;
+  document.getElementById("clock").textContent = `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
+}
+tick(); setInterval(tick, 1000);
+
+/* ================= 4 thẻ chỉ số ================= */
+const cardsEl = document.getElementById("cards");
+for (const k of KEYS){
+  const m = M[k];
+  cardsEl.insertAdjacentHTML("beforeend",
+   `<div class="card" id="c-${k}">
+      <div class="ic">${m.icon}</div>
+      <div class="nm">${m.name}</div>
+      <div class="vl"><span id="v-${k}">--</span> ${m.unit}</div>
+      <div class="th">Ngưỡng: ${m.thresh} ${m.unit}</div>
+    </div>`);
+}
+function updateCards(){
+  for (const k of KEYS){
+    const v = cur[k], m = M[k];
+    if (typeof v !== "number") continue;
+    document.getElementById("v-"+k).textContent = v.toFixed(m.dec);
+    document.getElementById("c-"+k).classList.toggle("warn", v > m.thresh);
+  }
+}
+
+/* ================= Firebase realtime ================= */
+const st = document.getElementById("status");
+onValue(ref(db, ".info/connected"), s => {
+  st.textContent = s.val() ? "● Đã kết nối" : "○ Mất kết nối";
+  st.classList.toggle("on", !!s.val());
+});
+onValue(ref(db, "cam_bien"), snap => {
+  const d = snap.val(); if (!d) return;
+  for (const k of KEYS) if (typeof d[k] === "number") cur[k] = d[k];
+  updateCards();
+  if (mode === "now" && chart) fillNow(true);
+});
+
+/* ================= Biểu đồ cột ================= */
+let mode = "week", chart = null, weekData = [], weekIsDemo = true, labelSize = 11;
+
+// Plugin: ghi số liệu trên đầu mỗi cột
+const valueLabels = {
+  id:"valueLabels",
+  afterDatasetsDraw(c){
+    const ctx = c.ctx; ctx.save();
+    ctx.fillStyle = "#1e3a8a"; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+    ctx.font = `700 ${labelSize}px system-ui, sans-serif`;
+    c.data.datasets.forEach((ds,i) => {
+      c.getDatasetMeta(i).data.forEach((bar,j) => {
+        const v = ds.data[j]; if (v == null) return;
+        ctx.fillText(Number(v).toFixed(ds.dec ?? 1), bar.x, bar.y - 4);
+      });
+    });
+    ctx.restore();
+  }
+};
+
+function baseOptions(showLegend){
+  return {
+    responsive:true, maintainAspectRatio:false,
+    layout:{ padding:{ top:18 } },
+    plugins:{
+      legend:{ display:showLegend, position:"bottom", labels:{ color:"#1e3a8a", usePointStyle:true, pointStyle:"rectRounded" } },
+      tooltip:{ callbacks:{ label:c => c.dataset.label === "Giá trị"
+        ? " " + Number(c.raw).toFixed(1)
+        : ` ${c.dataset.label}: ${Number(c.raw).toFixed(c.dataset.dec ?? 1)}` } }
+    },
+    scales:{
+      x:{ grid:{ display:false }, ticks:{ color:"#334155", font:{ weight:"600" } } },
+      y:{ beginAtZero:true, grace:"15%", position:"left",
+          title:{ display:true, text:"Giá trị đo được", color:"#475569" },
+          ticks:{ color:"#475569" }, grid:{ color:"#e2e8f0" } },
+      yCO2:{ beginAtZero:true, grace:"15%", position:"right",
+          title:{ display:true, text:"CO₂ (ppm)", color:M.co2.color },
+          ticks:{ color:M.co2.color }, grid:{ drawOnChartArea:false } }
+    }
+  };
+}
+
+function buildChart(){
+  if (chart) chart.destroy();
+  const ctx = document.getElementById("chart");
+  if (mode === "now"){
+    labelSize = 14;
+    chart = new Chart(ctx, { type:"bar", plugins:[valueLabels], options:baseOptions(false),
+      data:{ labels: KEYS.map(k => `${M[k].name} (${M[k].unit})`), datasets:[
+        { label:"Giá trị", yAxisID:"y", grouped:false, dec:1, borderRadius:6, maxBarThickness:70,
+          data:[null,null,null,null],
+          backgroundColor:[M.nhiet_do.color, M.do_am.color, "transparent", M.bui_min.color] },
+        { label:"Giá trị", yAxisID:"yCO2", grouped:false, dec:0, borderRadius:6, maxBarThickness:70,
+          data:[null,null,null,null], backgroundColor:M.co2.color }
+      ]}});
+    fillNow(false);
+    document.getElementById("note").textContent = "Giá trị đo hiện tại, cập nhật realtime từ ESP32. CO₂ dùng trục bên phải.";
+  } else {
+    labelSize = window.innerWidth < 700 ? 8 : 10;
+    chart = new Chart(ctx, { type:"bar", plugins:[valueLabels], options:baseOptions(true),
+      data:{ labels: weekData.map(r => [THU[new Date(r.ts*1000).getDay()], `${p2(new Date(r.ts*1000).getDate())}/${p2(new Date(r.ts*1000).getMonth()+1)}`]),
+        datasets: KEYS.map(k => ({
+          label:`${M[k].name} (${M[k].unit})`, dec:k==="nhiet_do"?1:0, borderRadius:4,
+          yAxisID:k==="co2"?"yCO2":"y", backgroundColor:M[k].color,
+          data: weekData.map(r => +r[k].toFixed(M[k].dec || 1)) })) }});
+    document.getElementById("note").textContent = weekIsDemo
+      ? "⚠ Đang hiển thị dữ liệu GIẢ LẬP (chưa đủ lịch sử thật trên Firebase). Mỗi cột là trung bình của một ngày."
+      : "Dữ liệu thật từ ESP32, mỗi cột là trung bình của một ngày.";
+  }
+}
+
+function fillNow(animate){
+  const v = KEYS.map(k => typeof cur[k] === "number" ? cur[k] : null);
+  chart.data.datasets[0].data = [v[0], v[1], null, v[3]];
+  chart.data.datasets[1].data = [null, null, v[2], null];
+  chart.update(animate ? undefined : "none");
+}
+
+/* ================= Lịch sử 7 ngày ================= */
+const MIN_REAL = 30;
+const rnd = (a,b) => a + Math.random()*(b-a);
+function rangeStart(){ const d = new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate()-6); return Math.floor(d.getTime()/1000); }
+
+function demoRows(){
+  const now = Math.floor(Date.now()/1000), rows = [];
+  for (let ts = rangeStart(); ts <= now; ts += 3*3600){
+    const h = new Date(ts*1000).getHours(), day = Math.sin((h-8)/24*2*Math.PI);
+    rows.push({ ts,
+      nhiet_do: 29 + 4*day + rnd(-1.5,1.5),
+      do_am:    65 - 10*day + rnd(-5,5),
+      co2:      700 + 300*Math.sin((h-6)/12*Math.PI) + rnd(-100,250),
+      bui_min:  rnd(15,90) });
+  }
+  return rows;
+}
+function dailyAvg(rows){
+  const map = new Map();
+  for (const r of rows){
+    const key = new Date(r.ts*1000).toDateString();
+    if (!map.has(key)) map.set(key, { ts:r.ts, n:0, nhiet_do:0, do_am:0, co2:0, bui_min:0 });
+    const b = map.get(key); b.n++;
+    for (const k of KEYS) b[k] += Number(r[k]) || 0;
+  }
+  return [...map.values()].sort((a,b)=>a.ts-b.ts).map(b => {
+    const o = { ts:b.ts }; for (const k of KEYS) o[k] = b[k]/b.n; return o; });
+}
+async function loadHistory(){
+  let rows = [];
+  try {
+    const snap = await get(query(ref(db,"lich_su"), orderByKey(), startAt(String(rangeStart()))));
+    if (snap.exists()) rows = Object.values(snap.val()).filter(r => r && r.ts);
+  } catch(e){ console.warn("Không đọc được lich_su:", e); }
+  weekIsDemo = rows.length < MIN_REAL;
+  if (weekIsDemo) rows = demoRows();
+  weekData = dailyAvg(rows);
+  if (mode === "week") buildChart();
+}
+
+/* ================= Chuyển chế độ ================= */
+const tabWeek = document.getElementById("tabWeek"), tabNow = document.getElementById("tabNow");
+function setMode(m){
+  mode = m;
+  tabWeek.classList.toggle("on", m === "week");
+  tabNow.classList.toggle("on", m === "now");
+  buildChart();
+}
+tabWeek.onclick = () => setMode("week");
+tabNow.onclick  = () => setMode("now");
+
+buildChart();          // dựng khung trước
+loadHistory();         // rồi nạp dữ liệu tuần
+setInterval(loadHistory, 5*60*1000);
+</script>
+</body>
+</html>
