@@ -42,6 +42,10 @@
   .card.warn .vl { color:var(--red); }
   .card.warn .th { color:var(--red); font-weight:600; }
 
+  .card.stale { border-color:transparent !important; }
+  .card.stale .vl, .card.stale .th { color:#94a3b8 !important; }
+  .card.stale .ic { opacity:.5; }
+
   /* Biểu đồ */
   .chart-box { background:rgba(255,255,255,.95); border-radius:18px; padding:16px 18px 14px; margin-top:16px; box-shadow:0 4px 14px rgba(15,50,120,.25); }
   .chart-head { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; }
@@ -62,6 +66,7 @@
       <span class="chip" id="date">--</span>
       <span class="chip time" id="clock">--:--:--</span>
       <span class="chip st" id="status">Đang kết nối…</span>
+      <span class="chip st" id="esp">ESP32: đang chờ…</span>
     </div>
   </div>
 
@@ -138,16 +143,32 @@ function updateCards(){
   }
 }
 
+/* ================= Trạng thái ESP32 (dựa vào ts mới nhất) ================= */
+let lastTs = 0;
+const ESP_TIMEOUT = 20;   // giây: quá lâu không có dữ liệu mới thì coi là offline
+function checkEsp(){
+  const el = document.getElementById("esp");
+  if (!lastTs) return;
+  const age = Math.floor(Date.now()/1000) - lastTs;
+  const online = age <= ESP_TIMEOUT;
+  el.textContent = online ? "● ESP32 online"
+    : `○ ESP32 offline (${age < 120 ? age + " giây" : Math.floor(age/60) + " phút"} trước)`;
+  el.classList.toggle("on", online);
+  document.querySelectorAll(".card").forEach(c => c.classList.toggle("stale", !online));
+}
+setInterval(checkEsp, 1000);
+
 /* ================= Firebase realtime ================= */
 const st = document.getElementById("status");
 onValue(ref(db, ".info/connected"), s => {
-  st.textContent = s.val() ? "● Đã kết nối" : "○ Mất kết nối";
+  st.textContent = s.val() ? "● Firebase OK" : "○ Mất kết nối Firebase";
   st.classList.toggle("on", !!s.val());
 });
 onValue(ref(db, "cam_bien"), snap => {
   const d = snap.val(); if (!d) return;
   for (const k of KEYS) if (typeof d[k] === "number") cur[k] = d[k];
-  updateCards();
+  lastTs = d.ts || 0;
+  updateCards(); checkEsp();
   if (mode === "now" && chart) fillNow(true);
 });
 
