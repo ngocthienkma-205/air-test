@@ -28,6 +28,12 @@
   .chip.st { background:#b91c1c; font-weight:500; font-size:.8rem; }
   .chip.st.on { background:#15803d; }
 
+  /* Chọn trạm */
+  .stations { display:flex; justify-content:center; gap:10px; margin-top:14px; }
+  .stations button { border:0; padding:10px 28px; border-radius:99px; background:rgba(255,255,255,.28);
+    color:#fff; font-weight:700; font-size:1rem; cursor:pointer; transition:.2s; }
+  .stations button.on { background:#fff; color:var(--blue); box-shadow:0 3px 10px rgba(15,50,120,.3); }
+
   /* 4 thẻ chỉ số */
   .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px; margin-top:16px; }
   .card {
@@ -68,6 +74,11 @@
       <span class="chip st" id="status">Đang kết nối…</span>
       <span class="chip st" id="esp">ESP32: đang chờ…</span>
     </div>
+  </div>
+
+  <div class="stations">
+    <button id="stIn" class="on">🏠 Trong nhà</button>
+    <button id="stOut">🌤️ Ngoài trời</button>
   </div>
 
   <section class="cards" id="cards"></section>
@@ -164,13 +175,27 @@ onValue(ref(db, ".info/connected"), s => {
   st.textContent = s.val() ? "● Firebase OK" : "○ Mất kết nối Firebase";
   st.classList.toggle("on", !!s.val());
 });
-onValue(ref(db, "cam_bien"), snap => {
-  const d = snap.val(); if (!d) return;
-  for (const k of KEYS) if (typeof d[k] === "number") cur[k] = d[k];
-  lastTs = d.ts || 0;
-  updateCards(); checkEsp();
-  if (mode === "now" && chart) fillNow(true);
-});
+let station = "trong_nha", unsubNow = null;
+function resetCards(){
+  for (const k of KEYS) document.getElementById("v-"+k).textContent = "--";
+  document.querySelectorAll(".card").forEach(c => c.classList.remove("warn","stale"));
+  const el = document.getElementById("esp");
+  el.textContent = "ESP32: đang chờ…"; el.classList.remove("on");
+}
+function listenStation(){
+  if (unsubNow) unsubNow();
+  for (const k of KEYS) cur[k] = null;
+  lastTs = 0; resetCards();
+  unsubNow = onValue(ref(db, station + "/cam_bien"), snap => {
+    const d = snap.val();
+    if (!d){ document.getElementById("esp").textContent = "Chưa có dữ liệu trạm này"; return; }
+    for (const k of KEYS) if (typeof d[k] === "number") cur[k] = d[k];
+    lastTs = d.ts || 0;
+    updateCards(); checkEsp();
+    if (mode === "now" && chart) fillNow(true);
+  });
+}
+listenStation();
 
 /* ================= Biểu đồ cột ================= */
 let mode = "week", chart = null, weekData = [], weekIsDemo = true, labelSize = 11;
@@ -255,15 +280,20 @@ const MIN_REAL = 30;
 const rnd = (a,b) => a + Math.random()*(b-a);
 function rangeStart(){ const d = new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate()-6); return Math.floor(d.getTime()/1000); }
 
-function demoRows(){
-  const now = Math.floor(Date.now()/1000), rows = [];
+function demoRows(stn){
+  const out = stn === "ngoai_troi", now = Math.floor(Date.now()/1000), rows = [];
   for (let ts = rangeStart(); ts <= now; ts += 3*3600){
     const h = new Date(ts*1000).getHours(), day = Math.sin((h-8)/24*2*Math.PI);
-    rows.push({ ts,
-      nhiet_do: 29 + 4*day + rnd(-1.5,1.5),
-      do_am:    65 - 10*day + rnd(-5,5),
-      co2:      700 + 300*Math.sin((h-6)/12*Math.PI) + rnd(-100,250),
-      bui_min:  rnd(15,90) });
+    rows.push(out ? { ts,
+      nhiet_do: 31 + 6*day + rnd(-2,2),
+      do_am:    70 - 15*day + rnd(-6,6),
+      co2:      470 + rnd(-40,80),
+      bui_min:  70 + 35*Math.sin((h-18)/24*2*Math.PI) + rnd(-15,25) }
+    : { ts,
+      nhiet_do: 27 + 2*day + rnd(-1,1),
+      do_am:    62 - 6*day + rnd(-4,4),
+      co2:      800 + 350*Math.sin((h-6)/12*Math.PI) + rnd(-100,250),
+      bui_min:  rnd(10,45) });
   }
   return rows;
 }
@@ -279,13 +309,15 @@ function dailyAvg(rows){
     const o = { ts:b.ts }; for (const k of KEYS) o[k] = b[k]/b.n; return o; });
 }
 async function loadHistory(){
+  const stn = station;
   let rows = [];
   try {
-    const snap = await get(query(ref(db,"lich_su"), orderByKey(), startAt(String(rangeStart()))));
+    const snap = await get(query(ref(db, stn + "/lich_su"), orderByKey(), startAt(String(rangeStart()))));
     if (snap.exists()) rows = Object.values(snap.val()).filter(r => r && r.ts);
   } catch(e){ console.warn("Không đọc được lich_su:", e); }
+  if (stn !== station) return;          // đã chuyển trạm trong lúc tải
   weekIsDemo = rows.length < MIN_REAL;
-  if (weekIsDemo) rows = demoRows();
+  if (weekIsDemo) rows = demoRows(stn);
   weekData = dailyAvg(rows);
   if (mode === "week") buildChart();
 }
@@ -300,6 +332,20 @@ function setMode(m){
 }
 tabWeek.onclick = () => setMode("week");
 tabNow.onclick  = () => setMode("now");
+
+const stIn = document.getElementById("stIn"), stOut = document.getElementById("stOut");
+function setStation(sn){
+  if (sn === station) return;
+  station = sn;
+  stIn.classList.toggle("on", sn === "trong_nha");
+  stOut.classList.toggle("on", sn === "ngoai_troi");
+  listenStation();
+  if (mode === "now" && chart) fillNow(false);
+  document.getElementById("note").textContent = "Đang tải…";
+  loadHistory();
+}
+stIn.onclick  = () => setStation("trong_nha");
+stOut.onclick = () => setStation("ngoai_troi");
 
 buildChart();          // dựng khung trước
 loadHistory();         // rồi nạp dữ liệu tuần
